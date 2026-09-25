@@ -161,7 +161,7 @@
     var INTERVAL_SEC = 900;
     var INTERVAL_MS = INTERVAL_SEC * 1000;
     var DAYS = 90;
-    var CHUNK_SIZE = 299;
+    var CHUNK_SIZE = 280;
     var CACHE_MS = 6 * 60 * 60 * 1000;
     var HISTORY_KEY = 'sixcents_eth_history_v1';
     var PREDICTIONS_KEY = 'sixcents_eth_predictions_v1';
@@ -221,15 +221,30 @@
       for(var i=0;i<tries;i++){
         try{
           var r=await fetch(url,{cache:'no-store',headers:{'Accept':'application/json'}});
-          if(!r.ok) throw new Error('HTTP '+r.status);
+          if(!r.ok){
+            var detail='';
+            try{
+              var body=await r.json();
+              detail=body&&body.message?': '+body.message:'';
+            }catch(ignore){
+              try{detail=': '+(await r.text()).slice(0,140);}catch(ignore2){}
+            }
+            var err=new Error('HTTP '+r.status+detail);
+            err.status=r.status;
+            throw err;
+          }
           return await r.json();
         }catch(e){lastErr=e;if(i<tries-1) await sleep(500*(i+1));}
       }
       throw lastErr||new Error('Network request failed');
     }
 
+    function isoSecond(sec){
+      return new Date(sec*1000).toISOString().replace('.000Z','Z');
+    }
+
     async function fetchCandles(startSec,endSec){
-      var url=API+'/products/'+PRODUCT+'/candles?granularity=900&start='+encodeURIComponent(new Date(startSec*1000).toISOString())+'&end='+encodeURIComponent(new Date(endSec*1000).toISOString());
+      var url=API+'/products/'+PRODUCT+'/candles?granularity=900&start='+encodeURIComponent(isoSecond(startSec))+'&end='+encodeURIComponent(isoSecond(endSec));
       var data=await fetchJson(url,3);
       if(!Array.isArray(data)) throw new Error('Unexpected candle response');
       return normalizeCandles(data);
@@ -237,23 +252,24 @@
 
     async function downloadHistory(){
       var boundarySec=Math.floor(Date.now()/INTERVAL_SEC)*INTERVAL_SEC;
-      var endSec=boundarySec-1;
+      var lastCompletedStart=boundarySec-INTERVAL_SEC;
       var startSec=boundarySec-(DAYS*24*60*60);
       startSec=Math.floor(startSec/INTERVAL_SEC)*INTERVAL_SEC;
       var rows=[];
-      var totalChunks=Math.ceil((endSec-startSec+1)/(CHUNK_SIZE*INTERVAL_SEC));
+      var totalCandles=Math.floor((lastCompletedStart-startSec)/INTERVAL_SEC)+1;
+      var totalChunks=Math.ceil(totalCandles/CHUNK_SIZE);
       var cursor=startSec;
       var chunk=0;
-      while(cursor<=endSec){
-        var chunkEnd=Math.min(endSec,cursor+(CHUNK_SIZE*INTERVAL_SEC)-1);
+      while(cursor<=lastCompletedStart){
+        var chunkEnd=Math.min(lastCompletedStart,cursor+((CHUNK_SIZE-1)*INTERVAL_SEC));
         chunk++;
         setStatus('Downloading ETH history…',chunk+' / '+totalChunks+' chunks','working');
         var got=await fetchCandles(cursor,chunkEnd);
         rows=rows.concat(got.map(function(c){return [c.t,c.l,c.h,c.o,c.c,c.v];}));
-        cursor=chunkEnd+1;
-        if(cursor<=endSec) await sleep(240);
+        cursor=chunkEnd+INTERVAL_SEC;
+        if(cursor<=lastCompletedStart) await sleep(300);
       }
-      var candles=normalizeCandles(rows).filter(function(c){return c.t<boundarySec;});
+      var candles=normalizeCandles(rows).filter(function(c){return c.t>=startSec&&c.t<=lastCompletedStart;});
       if(candles.length<3000) throw new Error('Historical download returned too few valid candles ('+candles.length+').');
       safeStore(HISTORY_KEY,{cachedAt:Date.now(),product:PRODUCT,granularity:INTERVAL_SEC,candles:compact(candles)});
       return candles;
