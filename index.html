@@ -251,7 +251,7 @@
     }
 
     async function downloadHistory(){
-      var boundarySec=Math.floor(Date.now()/INTERVAL_SEC)*INTERVAL_SEC;
+      var boundarySec=Math.floor(Date.now()/INTERVAL_MS)*INTERVAL_SEC;
       var startSec=boundarySec-(DAYS*24*60*60);
       startSec=Math.floor(startSec/INTERVAL_SEC)*INTERVAL_SEC;
       var rows=[];
