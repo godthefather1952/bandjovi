@@ -252,24 +252,22 @@
 
     async function downloadHistory(){
       var boundarySec=Math.floor(Date.now()/INTERVAL_SEC)*INTERVAL_SEC;
-      var lastCompletedStart=boundarySec-INTERVAL_SEC;
       var startSec=boundarySec-(DAYS*24*60*60);
       startSec=Math.floor(startSec/INTERVAL_SEC)*INTERVAL_SEC;
       var rows=[];
-      var totalCandles=Math.floor((lastCompletedStart-startSec)/INTERVAL_SEC)+1;
-      var totalChunks=Math.ceil(totalCandles/CHUNK_SIZE);
+      var totalChunks=Math.ceil((boundarySec-startSec)/(CHUNK_SIZE*INTERVAL_SEC));
       var cursor=startSec;
       var chunk=0;
-      while(cursor<=lastCompletedStart){
-        var chunkEnd=Math.min(lastCompletedStart,cursor+((CHUNK_SIZE-1)*INTERVAL_SEC));
+      while(cursor<boundarySec){
+        var requestEnd=Math.min(boundarySec,cursor+(CHUNK_SIZE*INTERVAL_SEC));
         chunk++;
         setStatus('Downloading ETH history…',chunk+' / '+totalChunks+' chunks','working');
-        var got=await fetchCandles(cursor,chunkEnd);
+        var got=await fetchCandles(cursor,requestEnd);
         rows=rows.concat(got.map(function(c){return [c.t,c.l,c.h,c.o,c.c,c.v];}));
-        cursor=chunkEnd+INTERVAL_SEC;
-        if(cursor<=lastCompletedStart) await sleep(300);
+        cursor=requestEnd;
+        if(cursor<boundarySec) await sleep(300);
       }
-      var candles=normalizeCandles(rows).filter(function(c){return c.t>=startSec&&c.t<=lastCompletedStart;});
+      var candles=normalizeCandles(rows).filter(function(c){return c.t>=startSec&&c.t<boundarySec;});
       if(candles.length<3000) throw new Error('Historical download returned too few valid candles ('+candles.length+').');
       safeStore(HISTORY_KEY,{cachedAt:Date.now(),product:PRODUCT,granularity:INTERVAL_SEC,candles:compact(candles)});
       return candles;
@@ -478,8 +476,10 @@
 
     async function boundaryCandle(boundaryMs){
       var sec=Math.floor(boundaryMs/1000);
-      for(var attempt=0;attempt<4;attempt++){
-        var got=await fetchCandles(sec,sec+INTERVAL_SEC);
+      for(var attempt=0;attempt<5;attempt++){
+        var nowSec=Math.floor(Date.now()/1000);
+        var requestEnd=Math.max(sec,Math.min(sec+INTERVAL_SEC,nowSec));
+        var got=await fetchCandles(sec,requestEnd);
         var c=got.find(function(x){return x.t===sec;});
         if(c) return c;
         await sleep(900*(attempt+1));
@@ -489,7 +489,7 @@
 
     async function recentCompletedCandles(boundaryMs){
       var sec=Math.floor(boundaryMs/1000);
-      var recent=await fetchCandles(sec-(120*INTERVAL_SEC),sec+60);
+      var recent=await fetchCandles(sec-(120*INTERVAL_SEC),sec);
       var merged=new Map();
       state.historyCandles.forEach(function(c){if(c.t<sec)merged.set(c.t,c);});
       recent.forEach(function(c){if(c.t<sec)merged.set(c.t,c);});
